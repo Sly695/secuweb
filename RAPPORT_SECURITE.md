@@ -4,7 +4,7 @@
 
 ---
 
-## 📋 Méthodologie d'Audit
+## Méthodologie d'Audit
 
 ### Black Box Testing
 - **Accès** : Aucun accès au code source
@@ -18,12 +18,12 @@
 
 ---
 
-## 🔍 PARTIE 1 : FAILLES DÉCOUVERTES EN MODE BLACK BOX
+## PARTIE 1 : FAILLES DÉCOUVERTES EN MODE BLACK BOX
 
 *Ces failles ont été découvertes sans accès au code source, uniquement via des tests d'API et d'analyse des réponses HTTP.*
 
 
-### 🔴 Failles Critiques
+### Failles Critiques
 
 #### 1. **CORS non configuré (ouvert à tous)**
 
@@ -162,12 +162,12 @@ Si les requêtes n'étaient pas paramétrées, un attaquant pourrait :
 3. **Vector d'attaque pour d'autres failles** : Combiné avec d'autres vulnérabilités, peut faciliter l'exploitation
 
 **Recommandation** :
-- ✅ **Conserver les requêtes paramétrées** : La protection actuelle avec `execute()` et les placeholders doit être maintenue sur toutes les routes
-- ✅ **Valider les entrées** : Ajouter une validation stricte des données d'entrée avant traitement
-- ✅ **Limiter les caractères spéciaux** : Filtrer ou échapper les caractères spéciaux SQL dans les champs de recherche
-- ✅ **Gestion d'erreurs sécurisée** : Ne pas exposer les détails des erreurs SQL aux clients
-- ✅ **Logging sécurisé** : Logger les tentatives d'injection SQL pour détection et réponse aux incidents
-- ✅ **Tests de sécurité** : Effectuer des tests d'injection SQL réguliers avec des outils comme SQLMap
+-  **Conserver les requêtes paramétrées** : La protection actuelle avec `execute()` et les placeholders doit être maintenue sur toutes les routes
+-  **Valider les entrées** : Ajouter une validation stricte des données d'entrée avant traitement
+-  **Limiter les caractères spéciaux** : Filtrer ou échapper les caractères spéciaux SQL dans les champs de recherche
+-  **Gestion d'erreurs sécurisée** : Ne pas exposer les détails des erreurs SQL aux clients
+-  **Logging sécurisé** : Logger les tentatives d'injection SQL pour détection et réponse aux incidents
+-  **Tests de sécurité** : Effectuer des tests d'injection SQL réguliers avec des outils comme SQLMap
 
 **Exemple de validation supplémentaire** :
 ```javascript
@@ -239,38 +239,38 @@ Cette faille, combinée avec d'autres failles déjà identifiées, permet une ex
 
 Une fois qu'un attaquant malveillant obtient un accès admin, il peut :
 
-1. **🚨 Suppression de tous les utilisateurs** :
+1. ** Suppression de tous les utilisateurs** :
    - Accès à `DELETE /api/users/:id` pour supprimer n'importe quel utilisateur
    - Suppression de tous les comptes légitimes
    - Suppression de l'administrateur légitime (lockout permanent)
    - Corruption complète de la base de données via les contraintes CASCADE
 
-2. **🚨 Modification des rôles utilisateurs** :
+2. ** Modification des rôles utilisateurs** :
    - Promotion de comptes compromis en administrateurs via `PUT /api/users/:id`
    - Création d'une backdoor permanente même si le compte admin original est récupéré
    - Dégradation du compte admin légitime pour bloquer l'accès
 
-3. **🚨 Destruction de tout le contenu** :
+3. ** Destruction de tout le contenu** :
    - Suppression de tous les articles via `DELETE /api/articles/:id` (nécessite `authorizeAdmin`)
    - Suppression de tous les commentaires (possible en tant qu'admin)
    - Défacing complet du site web
 
-4. **🚨 Modification de tout le contenu** :
+4. ** Modification de tout le contenu** :
    - Modification de n'importe quel article (ajout de contenu malveillant, XSS, etc.)
    - Injection de scripts malveillants dans les articles existants
    - Modification de l'attribution des articles (`author_id`)
 
-5. **🚨 Vol de données utilisateur** :
+5. ** Vol de données utilisateur** :
    - Accès à toutes les informations utilisateur (emails, usernames)
    - Si la base de données stocke d'autres données sensibles, elles sont accessibles
    - Compilation d'une base de données complète pour des attaques futures
 
-6. **🚨 Persistance de l'accès** :
+6. ** Persistance de l'accès** :
    - Création de nouveaux comptes admin
    - Modification du mot de passe de l'admin légitime (si stocké en clair)
    - Maintien de l'accès même après récupération du compte original
 
-7. **🚨 Attaques secondaires** :
+7. ** Attaques secondaires** :
    - Utilisation de la plateforme comme point d'entrée pour des attaques sur d'autres systèmes
    - Envoi d'emails de phishing aux utilisateurs listés
    - Escalade vers d'autres systèmes si des credentials sont réutilisés
@@ -721,31 +721,31 @@ const createDbConnection = () => {
 
 ---
 
-## 🛠️ Plan d'Action Prioritaire
+##  Plan d'Action Prioritaire
 
 ### Priorité 1 (Immédiat - Critique)
-1. ✅ **Implémenter le hachage des mots de passe** (bcrypt) - White Box
-2. ✅ **Ajouter la validation des entrées** (joi/express-validator) - White Box
-3. ✅ **Supprimer les console.log() de production** - White Box
-4. ✅ **Configurer CORS correctement** - Black Box
-5. ✅ **Implémenter la protection CSRF** - Black Box
-6. ✅ **Ajouter le rate limiting** - Black Box
-7. ✅ **Restreindre l'accès à `/api/users` aux administrateurs uniquement** - Black Box
+1.  **Implémenter le hachage des mots de passe** (bcrypt) - White Box
+2.  **Ajouter la validation des entrées** (joi/express-validator) - White Box
+3.  **Supprimer les console.log() de production** - White Box
+4.  **Configurer CORS correctement** - Black Box
+5.  **Implémenter la protection CSRF** - Black Box
+6.  **Ajouter le rate limiting** - Black Box
+7.  **Restreindre l'accès à `/api/users` aux administrateurs uniquement** - Black Box
 
 ### Priorité 2 (Court terme - Haute)
-8. ✅ **Sanitizer le contenu HTML** - Black Box
-9. ✅ **Renforcer la protection contre l'injection SQL** (validation supplémentaire, gestion d'erreurs) - Black Box
-10. ✅ **Valider les IDs et paramètres** - Black Box
-11. ✅ **Améliorer la gestion d'erreurs** - Black Box
-12. ✅ **Vérifier JWT_SECRET au démarrage** - White Box
-13. ✅ **Ajouter les headers de sécurité** (helmet) - Black Box
+8.  **Sanitizer le contenu HTML** - Black Box
+9.  **Renforcer la protection contre l'injection SQL** (validation supplémentaire, gestion d'erreurs) - Black Box
+10.  **Valider les IDs et paramètres** - Black Box
+11.  **Améliorer la gestion d'erreurs** - Black Box
+12.  **Vérifier JWT_SECRET au démarrage** - White Box
+13.  **Ajouter les headers de sécurité** (helmet) - Black Box
 
 ### Priorité 3 (Moyen terme - Moyenne/Faible)
-14. ✅ **Corriger la modification d'author_id** - Black Box
-15. ✅ **Améliorer la validation du rôle** - White Box
-16. ✅ **Implémenter les refresh tokens** - Black Box
-17. ✅ **Forcer HTTPS en production** - Black Box
-18. ✅ **Améliorer la connexion DB** - White Box
+14.  **Corriger la modification d'author_id** - Black Box
+15.  **Améliorer la validation du rôle** - White Box
+16.  **Implémenter les refresh tokens** - Black Box
+17.  **Forcer HTTPS en production** - Black Box
+18.  **Améliorer la connexion DB** - White Box
 
 ---
 
