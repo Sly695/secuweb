@@ -1,4 +1,4 @@
-# Rapport d'Audit de Sécurité - Application Web Blog
+# Rapport d'Audit de Sécurité
 
 **Date d'analyse** : Analyse effectuée sur l'application backend  
 **Méthodologie** : Audit combiné Black Box et White Box
@@ -145,6 +145,9 @@ curl -X POST http://localhost:5100/api/articles \
   }'
 ```
 
+**Image du test XSS** :
+![Test d'injection XSS échoué](./images/failXss.png)
+
 **Impact** :
 - Injection de scripts malveillants dans les pages
 - Vol de cookies/sessions (tokens JWT)
@@ -157,6 +160,160 @@ curl -X POST http://localhost:5100/api/articles \
 - Échapper les caractères spéciaux
 - Utiliser Content Security Policy (CSP) côté frontend
 - Valider et nettoyer toutes les entrées utilisateur
+
+---
+
+#### 5. **Exposition de la liste complète des utilisateurs à tous les utilisateurs authentifiés** (CRITIQUE)
+
+**Méthode de découverte** : Test d'accès à l'endpoint `/api/users` avec Postman
+
+**Description** :
+- Test effectué : Requête GET vers `/api/users` avec un token JWT d'un utilisateur normal (non-admin)
+- Résultat : La route retourne la liste complète de tous les utilisateurs, incluant les administrateurs
+- La route est protégée par `authenticate` mais **PAS par `authorizeAdmin`**
+- Exposition des informations sensibles : `id`, `username`, `email`, `role` pour tous les utilisateurs
+
+**Test effectué** :
+```bash
+# Avec un token d'utilisateur normal
+curl -X GET http://localhost:5100/api/users \
+  -H "Authorization: Bearer <token_utilisateur_normal>" \
+  -H "Content-Type: application/json"
+```
+
+**Image de la requête** :
+![Requête GET /api/users exposant tous les utilisateurs](./images/getUsersRoute.png)
+
+**Image via Burp Suite** :
+![Requête GET /api/users via Burp Suite](./images/getUsersRouteBurp.png)
+
+**Code vulnérable** :
+```6:15:backend/routes/users.js
+router.get('/', authenticate, async (req, res) => {
+  const sql = 'SELECT id, username, email, role FROM users';
+  try {
+    const [results] = await req.db.execute(sql);
+    res.json(results);
+  } catch (err) {
+    console.error('Erreur lors de la récupération des utilisateurs :', err);
+    res.status(500).json({ error: 'Erreur lors de la récupération des utilisateurs' });
+  }
+});
+```
+
+**Impact immédiat** :
+- **Fuite d'informations sensibles** : Expose les emails de tous les utilisateurs, y compris les administrateurs
+- **Enumération des utilisateurs** : Permet d'identifier tous les comptes existants sur la plateforme
+- **Identification des administrateurs** : Révèle quels utilisateurs ont le rôle `admin`
+- **Violation de la confidentialité** : Les utilisateurs normaux ne devraient pas avoir accès à ces informations
+
+**Chaîne d'exploitation complète** :
+
+Cette faille, combinée avec d'autres failles déjà identifiées, permet une exploitation en chaîne particulièrement dangereuse :
+
+1. **Étape 1 - Enumération** : Un utilisateur normal se connecte et fait une requête GET vers `/api/users`
+2. **Étape 2 - Découverte de l'admin** : Il obtient l'email de l'administrateur (ex: `admin@example.com`)
+3. **Étape 3 - Force brute** : En exploitant l'**absence de rate limiting** (Faille #3), il effectue des milliers de tentatives de connexion
+4. **Étape 4 - Mots de passe en clair** : Si la base de données est compromise, les mots de passe en clair sont exposés (Faille White Box #1)
+5. **Étape 5 - Accès admin** : Une fois connecté en tant qu'admin, l'attaquant a un contrôle total sur l'application
+
+**Risques critiques si un attaquant se connecte en tant qu'admin** :
+
+Une fois qu'un attaquant malveillant obtient un accès admin, il peut :
+
+1. **🚨 Suppression de tous les utilisateurs** :
+   - Accès à `DELETE /api/users/:id` pour supprimer n'importe quel utilisateur
+   - Suppression de tous les comptes légitimes
+   - Suppression de l'administrateur légitime (lockout permanent)
+   - Corruption complète de la base de données via les contraintes CASCADE
+
+2. **🚨 Modification des rôles utilisateurs** :
+   - Promotion de comptes compromis en administrateurs via `PUT /api/users/:id`
+   - Création d'une backdoor permanente même si le compte admin original est récupéré
+   - Dégradation du compte admin légitime pour bloquer l'accès
+
+3. **🚨 Destruction de tout le contenu** :
+   - Suppression de tous les articles via `DELETE /api/articles/:id` (nécessite `authorizeAdmin`)
+   - Suppression de tous les commentaires (possible en tant qu'admin)
+   - Défacing complet du site web
+
+4. **🚨 Modification de tout le contenu** :
+   - Modification de n'importe quel article (ajout de contenu malveillant, XSS, etc.)
+   - Injection de scripts malveillants dans les articles existants
+   - Modification de l'attribution des articles (`author_id`)
+
+5. **🚨 Vol de données utilisateur** :
+   - Accès à toutes les informations utilisateur (emails, usernames)
+   - Si la base de données stocke d'autres données sensibles, elles sont accessibles
+   - Compilation d'une base de données complète pour des attaques futures
+
+6. **🚨 Persistance de l'accès** :
+   - Création de nouveaux comptes admin
+   - Modification du mot de passe de l'admin légitime (si stocké en clair)
+   - Maintien de l'accès même après récupération du compte original
+
+7. **🚨 Attaques secondaires** :
+   - Utilisation de la plateforme comme point d'entrée pour des attaques sur d'autres systèmes
+   - Envoi d'emails de phishing aux utilisateurs listés
+   - Escalade vers d'autres systèmes si des credentials sont réutilisés
+
+**Exemple d'exploitation** :
+
+```bash
+# Étape 1 : Un utilisateur normal se connecte
+curl -X POST http://localhost:5100/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com","password":"user"}'
+
+# Étape 2 : Il récupère la liste des utilisateurs
+curl -X GET http://localhost:5100/api/users \
+  -H "Authorization: Bearer <token_obtenu>"
+
+# Réponse : {"id":1,"username":"admin","email":"admin@example.com","role":"admin"}
+
+# Étape 3 : Force brute sur le compte admin (pas de rate limiting)
+for password in $(cat common_passwords.txt); do
+  curl -X POST http://localhost:5100/api/auth/login \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"admin@example.com\",\"password\":\"$password\"}"
+done
+
+# Étape 4 : Une fois connecté en admin, suppression de tous les utilisateurs
+curl -X DELETE http://localhost:5100/api/users/2 \
+  -H "Authorization: Bearer <token_admin>"
+
+# Étape 5 : Création d'un compte admin de secours
+curl -X POST http://localhost:5100/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"backdoor","email":"backdoor@evil.com","password":"secret123"}'
+
+curl -X PUT http://localhost:5100/api/users/<nouveau_id> \
+  -H "Authorization: Bearer <token_admin>" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"backdoor","email":"backdoor@evil.com","role":"admin"}'
+```
+
+**Recommandation** :
+- Ajouter `authorizeAdmin` à la route GET `/api/users` pour restreindre l'accès aux administrateurs uniquement
+- Implémenter le principe du moindre privilège : les utilisateurs normaux ne doivent voir que leurs propres informations
+- Si nécessaire, créer une route séparée pour que les utilisateurs voient leurs propres informations via `GET /api/users/me`
+- Limiter les informations retournées même pour les admins (par exemple, ne pas exposer les emails complets si non nécessaire)
+- Ajouter un système d'audit pour tracer qui accède aux données sensibles
+
+**Code corrigé** :
+```javascript
+// Route pour lister les utilisateurs - RÉSERVÉE AUX ADMINS
+router.get('/', authenticate, authorizeAdmin, async (req, res) => {
+  const sql = 'SELECT id, username, email, role FROM users';
+  try {
+    const [results] = await req.db.execute(sql);
+    res.json(results);
+  } catch (err) {
+    console.error('Erreur lors de la récupération des utilisateurs :', err);
+    res.status(500).json({ error: 'Erreur lors de la récupération des utilisateurs' });
+  }
+});
+```
 
 ---
 
@@ -230,7 +387,7 @@ curl -X POST http://localhost:5100/api/articles \
 
 ---
 
-#### 7. **Validation d'ID insuffisante** (MOYENNE)
+#### 8. **Validation d'ID insuffisante** (MOYENNE)
 
 **Méthode de découverte** : Tests avec des IDs invalides
 
@@ -263,7 +420,7 @@ curl http://localhost:5100/api/articles/999999999999999999
 
 ---
 
-#### 8. **Modification de l'author_id possible** (MOYENNE)
+#### 9. **Modification de l'author_id possible** (MOYENNE)
 
 **Méthode de découverte** : Test de modification d'article avec author_id différent
 
@@ -297,7 +454,7 @@ curl -X PUT http://localhost:5100/api/articles/1 \
 
 ---
 
-#### 9. **Absence de HTTPS forcé** (FAIBLE)
+#### 10. **Absence de HTTPS forcé** (FAIBLE)
 
 **Méthode de découverte** : Test de connexion HTTP
 
@@ -318,7 +475,7 @@ curl -X PUT http://localhost:5100/api/articles/1 \
 
 ---
 
-#### 10. **Tokens JWT sans refresh token** (FAIBLE)
+#### 11. **Tokens JWT sans refresh token** (FAIBLE)
 
 **Méthode de découverte** : Analyse du mécanisme d'authentification
 
@@ -598,11 +755,11 @@ const createDbConnection = () => {
 ### Black Box Testing
 | Sévérité | Nombre | Failles |
 |----------|--------|---------|
-| 🔴 Critique | 4 | CORS ouvert, CSRF absent, Rate limiting absent, XSS |
+| 🔴 Critique | 5 | CORS ouvert, CSRF absent, Rate limiting absent, XSS, Exposition liste utilisateurs |
 | 🟡 Moyenne | 4 | Headers sécurité, Erreurs révélatrices, Validation ID, Modification author_id |
 | 🟢 Faible | 2 | HTTPS, Refresh tokens |
 
-**Total Black Box** : 10 failles identifiées
+**Total Black Box** : 11 failles identifiées
 
 ### White Box Testing
 | Sévérité | Nombre | Failles |
@@ -612,7 +769,7 @@ const createDbConnection = () => {
 
 **Total White Box** : 5 failles identifiées
 
-**TOTAL GÉNÉRAL** : 15 failles identifiées
+**TOTAL GÉNÉRAL** : 16 failles identifiées
 
 ---
 
@@ -625,6 +782,7 @@ const createDbConnection = () => {
 4. ✅ **Configurer CORS correctement** - Black Box
 5. ✅ **Implémenter la protection CSRF** - Black Box
 6. ✅ **Ajouter le rate limiting** - Black Box
+7. ✅ **Restreindre l'accès à `/api/users` aux administrateurs uniquement** - Black Box
 
 ### Priorité 2 (Court terme - Haute)
 7. ✅ **Sanitizer le contenu HTML** - Black Box
