@@ -1,6 +1,5 @@
 # Rapport d'Audit de Sécurité
 
-**Date d'analyse** : Analyse effectuée sur l'application backend  
 **Méthodologie** : Audit combiné Black Box et White Box
 
 ---
@@ -23,11 +22,10 @@
 
 *Ces failles ont été découvertes sans accès au code source, uniquement via des tests d'API et d'analyse des réponses HTTP.*
 
----
 
-### 🔴 Failles Critiques (Black Box)
+### 🔴 Failles Critiques
 
-#### 1. **CORS non configuré (ouvert à tous)** (CRITIQUE)
+#### 1. **CORS non configuré (ouvert à tous)**
 
 **Méthode de découverte** : Analyse des headers HTTP de réponse
 
@@ -49,30 +47,7 @@
 
 ---
 
-#### 2. **Absence de protection CSRF** (CRITIQUE)
-
-**Méthode de découverte** : Test de requête cross-origin avec session valide
-
-**Description** :
-- Test effectué : Création d'une page HTML malveillante qui envoie une requête POST à l'API, testé via Burp Suite
-- Résultat : Les requêtes modifiantes (POST/PUT/DELETE) sont acceptées sans token CSRF
-- Aucun header `X-CSRF-Token` ou mécanisme de protection détecté
-
-**Impact** :
-- Un attaquant peut forcer un utilisateur authentifié à effectuer des actions non désirées
-- Modification/suppression de données sans consentement
-- Élévation de privilèges possible
-- Création de contenu malveillant au nom de l'utilisateur
-
-**Recommandation** :
-- Implémenter des tokens CSRF
-- Utiliser `csurf` ou `csrf` middleware
-- Valider les tokens sur toutes les requêtes modifiantes
-- Utiliser SameSite cookies
-
----
-
-#### 3. **Absence de rate limiting** (CRITIQUE)
+#### 2. **Absence de rate limiting** 
 
 **Méthode de découverte** : Test de force brute sur l'endpoint de connexion
 
@@ -96,7 +71,7 @@
 
 ---
 
-#### 4. **Absence de sanitization XSS** (CRITIQUE)
+#### 3. **Absence de sanitization XSS** 
 
 **Méthode de découverte** : Injection de scripts dans les champs de contenu
 
@@ -120,7 +95,101 @@
 
 ---
 
-#### 5. **Exposition de la liste complète des utilisateurs à tous les utilisateurs authentifiés** (CRITIQUE)
+#### 4. **Tentative d'injection SQL sur la recherche d'articles** (Partiellement protégée)
+
+**Méthode de découverte** : Tests d'injection SQL sur l'endpoint `/api/articles/search` via Postman et Burp Suite
+
+**Description** :
+- Test effectué : Injection de payloads SQL dans le champ `title` de la recherche d'articles
+- Résultat : Des tentatives d'injection SQL sont possibles et peuvent provoquer des erreurs visibles
+- La route utilise des requêtes paramétrées avec `execute()`, ce qui limite l'exploitation complète
+- Cependant, certaines tentatives peuvent révéler des informations sur la structure de la base de données
+
+**Image de la tentative d'injection SQL** :
+![Tentative d'injection SQL sur /api/articles/search](./images/injectionSQL.png)
+
+**Image du résultat de l'injection SQL** :
+![Résultat de la tentative d'injection SQL](./images/injectionSQLresult.png)
+
+**Code analysé** :
+```18:34:backend/routes/articles.js
+router.post('/search', async (req, res) => {
+  console.log(
+    'req.body:', req.body,
+  );
+
+  const { title } = req.body;
+  const sql = `SELECT * FROM articles WHERE title LIKE ?`;
+  console.log(sql);
+
+  try {
+    const [results] = await req.db.execute(sql, [`%${title}%`]);
+    res.json(results);
+  } catch (err) {
+    console.error('Erreur lors de la recherche des articles :', err);
+    res.status(500).json({ error: 'Erreur lors de la recherche des articles' });
+  }
+});
+```
+
+**Analyse de la vulnérabilité** :
+
+1. **Protection partielle** : La route utilise `execute()` avec des paramètres préparés (`?`), ce qui empêche l'exécution complète de code SQL malveillant
+2. **Tentatives d'injection possibles** : Malgré les requêtes paramétrées, certaines tentatives peuvent :
+   - Provoquer des erreurs SQL visibles dans les logs ou les réponses
+   - Révéler des informations sur la structure de la base de données
+   - Permettre une injection SQL aveugle (Blind SQL Injection) dans certains cas
+
+**Pourquoi l'exploitation complète n'a pas fonctionné** :
+
+- **Requêtes paramétrées** : L'utilisation de `execute()` avec des placeholders `?` force MySQL2 à utiliser des prepared statements, qui échappent automatiquement les paramètres
+- **Le paramètre est traité comme une chaîne** : Le `%${title}%` est passé comme une seule valeur, empêchant l'injection de commandes SQL
+- **Protection au niveau du driver** : MySQL2 implémente des mécanismes de protection contre les injections SQL au niveau du driver
+
+**Impact potentiel si la protection était absente** :
+
+Si les requêtes n'étaient pas paramétrées, un attaquant pourrait :
+- Extraire toutes les données de la base de données
+- Modifier ou supprimer des données
+- Récupérer les mots de passe en clair (déjà une faille critique identifiée)
+- Élever ses privilèges
+- Exécuter des commandes système (si les permissions le permettent)
+
+**Risques restants même avec protection** :
+
+1. **Blind SQL Injection** : Possibilité de déduire des informations via des différences de temps de réponse ou de comportement
+2. **Fuites d'informations** : Les erreurs SQL peuvent révéler la structure de la base de données
+3. **Vector d'attaque pour d'autres failles** : Combiné avec d'autres vulnérabilités, peut faciliter l'exploitation
+
+**Recommandation** :
+- ✅ **Conserver les requêtes paramétrées** : La protection actuelle avec `execute()` et les placeholders doit être maintenue sur toutes les routes
+- ✅ **Valider les entrées** : Ajouter une validation stricte des données d'entrée avant traitement
+- ✅ **Limiter les caractères spéciaux** : Filtrer ou échapper les caractères spéciaux SQL dans les champs de recherche
+- ✅ **Gestion d'erreurs sécurisée** : Ne pas exposer les détails des erreurs SQL aux clients
+- ✅ **Logging sécurisé** : Logger les tentatives d'injection SQL pour détection et réponse aux incidents
+- ✅ **Tests de sécurité** : Effectuer des tests d'injection SQL réguliers avec des outils comme SQLMap
+
+**Exemple de validation supplémentaire** :
+```javascript
+const { title } = req.body;
+
+// Validation : rejeter les caractères SQL dangereux
+if (/['";\\--]/.test(title)) {
+  return res.status(400).json({ error: 'Caractères invalides dans la recherche' });
+}
+
+// Limiter la longueur
+if (title.length > 100) {
+  return res.status(400).json({ error: 'Recherche trop longue' });
+}
+
+const sql = `SELECT * FROM articles WHERE title LIKE ?`;
+const [results] = await req.db.execute(sql, [`%${title}%`]);
+```
+
+---
+
+#### 5. **Exposition de la liste complète des utilisateurs à tous les utilisateurs authentifiés** 
 
 **Méthode de découverte** : Test d'accès à l'endpoint `/api/users` avec Postman
 
@@ -385,7 +454,7 @@ router.get('/', authenticate, authorizeAdmin, async (req, res) => {
 
 ### 🔴 Failles Critiques (White Box)
 
-#### 1. **Stockage des mots de passe en clair** (CRITIQUE)
+#### 1. **Stockage des mots de passe en clair** 
 
 **Localisation** : `backend/routes/auth.js`
 
@@ -417,7 +486,7 @@ router.get('/', authenticate, authorizeAdmin, async (req, res) => {
 
 ---
 
-#### 2. **Absence de validation des entrées utilisateur** (CRITIQUE)
+#### 2. **Absence de validation des entrées utilisateur** 
 
 **Localisation** : Toutes les routes
 
@@ -465,7 +534,7 @@ router.post('/register', async (req, res) => {
 
 ---
 
-#### 3. **Exposition d'informations sensibles via les logs** (CRITIQUE)
+#### 3. **Exposition d'informations sensibles via les logs** 
 
 **Localisation** : `backend/routes/articles.js`, `backend/routes/comments.js`
 
@@ -634,11 +703,11 @@ const createDbConnection = () => {
 ### Black Box Testing
 | Sévérité | Nombre | Failles |
 |----------|--------|---------|
-| 🔴 Critique | 5 | CORS ouvert, CSRF absent, Rate limiting absent, XSS, Exposition liste utilisateurs |
+| 🔴 Critique | 6 | CORS ouvert, CSRF absent, Rate limiting absent, XSS, Injection SQL (partiellement protégée), Exposition liste utilisateurs |
 | 🟡 Moyenne | 4 | Headers sécurité, Erreurs révélatrices, Validation ID, Modification author_id |
 | 🟢 Faible | 2 | HTTPS, Refresh tokens |
 
-**Total Black Box** : 11 failles identifiées
+**Total Black Box** : 12 failles identifiées
 
 ### White Box Testing
 | Sévérité | Nombre | Failles |
@@ -648,7 +717,7 @@ const createDbConnection = () => {
 
 **Total White Box** : 5 failles identifiées
 
-**TOTAL GÉNÉRAL** : 16 failles identifiées
+**TOTAL GÉNÉRAL** : 17 failles identifiées
 
 ---
 
@@ -664,18 +733,19 @@ const createDbConnection = () => {
 7. ✅ **Restreindre l'accès à `/api/users` aux administrateurs uniquement** - Black Box
 
 ### Priorité 2 (Court terme - Haute)
-7. ✅ **Sanitizer le contenu HTML** - Black Box
-8. ✅ **Valider les IDs et paramètres** - Black Box
-9. ✅ **Améliorer la gestion d'erreurs** - Black Box
-10. ✅ **Vérifier JWT_SECRET au démarrage** - White Box
-11. ✅ **Ajouter les headers de sécurité** (helmet) - Black Box
+8. ✅ **Sanitizer le contenu HTML** - Black Box
+9. ✅ **Renforcer la protection contre l'injection SQL** (validation supplémentaire, gestion d'erreurs) - Black Box
+10. ✅ **Valider les IDs et paramètres** - Black Box
+11. ✅ **Améliorer la gestion d'erreurs** - Black Box
+12. ✅ **Vérifier JWT_SECRET au démarrage** - White Box
+13. ✅ **Ajouter les headers de sécurité** (helmet) - Black Box
 
 ### Priorité 3 (Moyen terme - Moyenne/Faible)
-12. ✅ **Corriger la modification d'author_id** - Black Box
-13. ✅ **Améliorer la validation du rôle** - White Box
-14. ✅ **Implémenter les refresh tokens** - Black Box
-15. ✅ **Forcer HTTPS en production** - Black Box
-16. ✅ **Améliorer la connexion DB** - White Box
+14. ✅ **Corriger la modification d'author_id** - Black Box
+15. ✅ **Améliorer la validation du rôle** - White Box
+16. ✅ **Implémenter les refresh tokens** - Black Box
+17. ✅ **Forcer HTTPS en production** - Black Box
+18. ✅ **Améliorer la connexion DB** - White Box
 
 ---
 
